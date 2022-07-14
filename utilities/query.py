@@ -11,7 +11,10 @@ from urllib.parse import urljoin
 import pandas as pd
 import fileinput
 import logging
+import fasttext
+import numpy as np
 
+model = fasttext.load_model('/workspace/datasets/fasttext/query_classifier.bin')
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -49,7 +52,18 @@ def create_prior_queries(doc_ids, doc_id_weights,
 
 
 # Hardcoded query here.  Better to use search templates or other query config.
-def create_query(user_query, click_prior_query, filters, sort="_score", sortDir="desc", size=10, source=None):
+def create_query(user_query, click_prior_query, filters, sort="_score", sortDir="desc", size=10, source=None, predicted_categories=None):
+
+    print(f'Predicted categories: {predicted_categories}')
+    filter_clause = []
+    if predicted_categories is not None:
+        filter_clause.append({
+                        "terms": {
+                                "categoryPathIds": predicted_categories
+                                }
+                        }
+                    )
+
     query_obj = {
         'size': size,
         "sort": [
@@ -59,9 +73,7 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
             "function_score": {
                 "query": {
                     "bool": {
-                        "must": [
-
-                        ],
+                        "must": filter_clause,
                         "should": [  #
                             {
                                 "match": {
@@ -188,9 +200,18 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
 
 def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc"):
     #### W3: classify the query
+    pred = model.predict(user_query, k=10)
+    q = __import__("functools").partial(__import__("os")._exit, 0)  # FIXME
+    __import__("IPython").embed()  # FIXME  
+
+    scores = pred[1]
+    cumsum_scores = np.cumsum(scores)
+    should_include = np.argmin(cumsum_scores < 0.75) + 1 if sum(scores) > .75 else len(scores)
+    ft_categories = list(pred[0][:should_include])
+    categories = [s[9:] for s in ft_categories]
     #### W3: create filters and boosts
     # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
+    query_obj = create_query(user_query, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir, source=["name", "shortDescription"], predicted_categories=categories)
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
